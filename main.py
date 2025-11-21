@@ -1,63 +1,46 @@
-import os
 import requests
 import re
-from pyrogram import Client, filters
+import urllib.parse
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-
-# Memory session → FloodWait ഇല്ല
-app = Client(
-    ":memory:",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN
-)
-
-def get_direct_url(link):
+def get_direct_url(share_url):
     try:
-        if "www" not in link:
-            link = link.replace("terabox.com", "www.terabox.com")
+        # Normalize domain
+        share_url = share_url.replace("teraboxshare.com", "www.1024tera.com")
+        share_url = share_url.replace("terabox.com", "www.1024tera.com")
+        share_url = share_url.replace("nephobox.com", "www.1024tera.com")
 
-        headers = {"User-Agent": "Mozilla/5.0"}
-        html = requests.get(link, headers=headers, timeout=10).text
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
 
-        # First pattern (most common)
-        match1 = re.search(r'"downloadUrl":"(https:[^"]+)"', html)
-        if match1:
-            url = match1.group(1).replace("\\u002F", "/").replace("\\", "")
-            return url
+        # Step 1 — GET share page
+        r = requests.get(share_url, headers=headers, timeout=10)
+        html = r.text
 
-        # Second pattern (fallback)
-        match2 = re.search(r'"direct_link":"(https:[^"]+)"', html)
-        if match2:
-            url = match2.group(1).replace("\\u002F", "/").replace("\\", "")
-            return url
+        # Step 2 — extract js file containing real file info
+        m = re.search(r'src="(/static/js/main\.[^"]+)"', html)
+        if not m:
+            return None
 
-        return None
+        js_url = "https://www.1024tera.com" + m.group(1)
+        js = requests.get(js_url, headers=headers, timeout=10).text
+
+        # Step 3 — find the encoded file info URL
+        info_match = re.search(r'"(https://api[^"]+file[^"]+)"', js)
+        if not info_match:
+            return None
+
+        info_url = info_match.group(1)
+
+        # Step 4 — request real file metadata
+        info = requests.get(info_url, headers=headers, timeout=10).json()
+
+        # Step 5 — download URL extract
+        try:
+            durl = info["data"]["download_url"]
+            return urllib.parse.unquote(durl)
+        except:
+            return None
 
     except:
         return None
-
-
-@app.on_message(filters.command("start"))
-async def start(_, msg):
-    await msg.reply("👋 Terabox link അയക്കൂ! ഞാൻ download ചെയ്ത് നൽകാം.")
-
-
-@app.on_message(filters.text)
-async def dl(_, msg):
-    link = msg.text.strip()
-    await msg.reply("🔍 Link പരിശോധിക്കുന്നു...")
-
-    url = get_direct_url(link)
-
-    if not url:
-        return await msg.reply("❌ Direct link കിട്ടിയില്ല.\n➡ Link public ആണോ എന്ന് check ചെയ്യൂ.")
-
-    await msg.reply("⬆️ Upload ചെയ്യുന്നു... കുറച്ചു സമയം എടുക്കും.")
-    await msg.reply_document(url)
-
-
-app.run()
